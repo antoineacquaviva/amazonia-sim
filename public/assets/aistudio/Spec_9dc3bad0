@@ -1,0 +1,373 @@
+﻿1. Philosophie Fonctionnelle & Périmètre du Simulateur
+Le simulateur repose sur un découplage strict entre trois couches fonctionnelles :
+1. Le Moteur du Châssis Invariable : Exécute la topologie de la Roue de la Forêt, la séquence des 6 étapes d'un tour, la gestion des paquets de cartes Machine/Sabotage, la matrice de voisinage des 30 tuiles de synergie et les 3 conditions de fin de partie.
+2. Le Système d'Injection de Slots (Feuilles de Patch) : Charge dynamiquement des fichiers de configuration externes décrivant le comportement des 30 tuiles (G1-G15, R1-R10, M1-M5) et des 2 Slots de migration d'Insectes (Bug du Cerveau et Colonisation des Gardiens) en assemblant les 7 Briques Élémentaires.
+3. L'Orchestrateur de Campagnes & d'Évaluation : Parcourt l'espace des variantes (options de règles du Châssis + paramètres de Slots) sur l'ensemble des configurations de table, fait jouer différents profils de bots, et compile les métriques selon les 5 axes de notation.
+2. Paramétrage du Châssis & Gestion des Variantes Globales
+Pour tester les points encore en suspens dans la v4.6 sans toucher au code du moteur, le simulateur expose un Vecteur de Configuration du Châssis acceptant des plages de valeurs (permettant un balayage en grille / grid search) :
+Paramètre du Châssis
+	Description fonctionnelle
+	Valeurs / Options testables
+	N_Joueurs
+	Nombre de Peuples autour de la Roue.
+	3, 4, 5, 6 (ou ALL).
+	P_Max
+	Nombre de parcelles par piste Forêt (de  à ).
+	Entier (ex. [3, 4, 5]) ou fonction de .
+	Comportement_Bout_Rayon
+	Règle appliquée quand une machine en  joue une tactique ciblant  (T2, T3, T5, T6) ou avance (T3, T6).
+	• FRAPPE_SUR_PLACE : T2/T5 frappent  ; T3/T6 frappent deux fois .
+
+
+• FRAPPE_A_VIDE_AVANT : La frappe en  est perdue, seule la frappe en  s'applique.
+
+
+• DEGAT_COEUR : Une frappe/avancée au-delà de  retire 1 Arbre sur une parcelle adjacente ou fait gagner +1 Apprentissage à la Tactique.
+
+
+• BOUCLE_VOISIN : Cible la parcelle  d'un voisin.
+	Regle_Seuil_Gardiens
+	Condition déclenchant l'arrêt anticipé Réveil de la Forêt.
+	• FIXE_N : Exactement  tuiles Gardien sur la piste (socle provisoire).
+
+
+• ADAPTATIF_DISPO : .
+
+
+• COMPTEUR_RESONANCE :  tuiles posées OU  activations du Déclencheur 4.
+	Courbe_Croissance_Nid
+	Nombre d'Insectes générés à l'Étape 4.2 selon les Insectes déjà présents sur le Nid.
+	Tableau de seuils paramétrable (ex. Standard : 0-1 -> +1, 2+ -> +2 ; Variante : linéaire +1, plafond à 3).
+	3. Spécification du Format de « Feuille de Patch » (Slots Standard & Personnalisés)
+Pour te permettre de concevoir tes effets dans d'autres discussions Gemini et de les brancher directement dans le simulateur, nous définissons un contrat d'interface déclaratif (format JSON ou YAML). Ce contrat gère 3 niveaux de granularité :
+3.1. Niveau 1 : Le Mode « Socle / Standard » (Baseline)
+Permet de faire tourner le jeu avec des effets génériques symétriques pour calibrer le Châssis pur :
+* Toutes les tuiles d'une même famille (G, R, M) partagent un effet standard simple (ex. tout G = 1 primitive unique liée à son Déclencheur ; tout R = avance de 1 cran vers la gauche si une condition simple est remplie ; tout M = génère uniquement ses Insectes de Châssis).
+3.2. Niveau 2 : La Grammaire Déclarative des Slots Personnalisés
+Chaque Slot (G1..G15, R1..R10, M1..M5, SLOT_BUG_CERVEAU, SLOT_COLONISATION_GARDIENS) est décrit par un bloc standardisé utilisant exclusivement les concepts de la section 4 du document v4.6 :
+* id_slot : Identifiant (G1 à G15, R1 à R10, M1 à M5, INSECTE_BUG, INSECTE_COLONIE).
+* architecture_cycle_vie (exclusif aux Gardiens G1-G15) :
+   1. SIMPLE_CONTINU (1 face),
+   2. DOUBLE_FACE_UPGRADE (Face 1 Initiale  Face 2 Améliorée),
+   3. SACRIFICE_ONESHOT (avec modalité RETOUR_FACE_EPUISEE ou RENVOI_LISIERE).
+   * parametres_insectes (exclusif aux Slots d'Insectes) :
+   1. attachement : RANG_PHYSIQUE | TUILE | CASE_DECLENCHEUR.
+   2. hook_temporel : ETAPE_3_2_REVELATION | ETAPE_4_3_ARRIVEE | ETAPE_5_ATTAQUE | ETAPE_6_APPRENTISSAGE | SUR_DECLENCHEUR.
+   3. mode_consommation : CONSOMME_ONESHOT | PASSIF_CONTINU.
+   * declencheur_cablage (pour les Gardiens) : LIBRE (par défaut à l'Étape 3.1) ou AFFINITE_RECOMMANDEE (indique au bot quel Déclencheur 1 à 6 privilégier).
+   * effets (Liste d'actions atomiques issues des 7 Briques Élémentaires) : Chaque effet combine une Condition d'exécution (optionnelle), un Sélecteur de Cible (ex. Parcelle de la machine la plus avancée, Lisière des peuples X et Y, Rang du dé M), et une Primitive parmi les 7 briques :
+   1. MOD_SEUIL(cible_parcelle, valeur_X, auto_parade_bool)
+   2. CREATION_ENTITE(type: PIEGE | INSECTE | SABOTAGE | REPOUSSE_ARBRE, cible)
+   3. DEPLACEMENT(type: DEFENSEUR | PIEGE | INSECTE | MACHINE_RECUL, origine, destination, amplitude)
+   4. MOD_PUISSANCE(cible_machine, delta: -1, bloquer_gain_etape5_bool)
+   5. MOD_APPRENTISSAGE(cible_rang_ou_tactique, delta_X)
+   6. PERMUTATION_PISTE(cible_rang, direction: GAUCHE | DROITE, decalage_lecture_de_M)
+   7. PARTAGE_INFO_ETAT_GARDIEN(type_action: REVELER_MACHINE | REVELER_DE_M | FLIP_GARDIEN_F2 | REACTIVER_GARDIEN, cible)
+3.3. Niveau 3 : Gestion des Variantes Internes (Paramètres Balayables dans un Slot)
+Pour éviter de créer 10 fichiers différents lorsqu'un effet comporte une option ou une valeur à calibrer, la grammaire autorise l'objet $Sweep sur n'importe quel champ d'un Slot :
+   * Exemple sur une valeur numérique : "valeur_X": {"$Sweep": [1, 2, 3]} (le simulateur générera automatiquement 3 sous-variantes de ce Slot pour comparer un modificateur de seuil de -1, -2 ou -3).
+   * Exemple sur une option structurelle : "mode_consommation": {"$Sweep": ["CONSOMME_ONESHOT", "PASSIF_CONTINU"]} (permet de comparer en une seule campagne un Slot d'Insecte en mode court-circuit vs mode parasite continu).
+3.4. Bibliothèque de slots
+
+
+Je souhaite que le simulateur teste des effets sur les slots parmi une "bibliothèque" de slots qu'on lui fournit. Par exemple je mets au point x slots (qui comportent pour certains des paramètres) et le simulateur ajoute cette combinatoire à celles qu'on a déjà définies. 
+
+
+
+
+
+
+4. Plan d'Exploration Combinatoire & Couverture des Configurations
+Le simulateur doit garantir une couverture sans angle mort des configurations de jeu décrites dans l'Annexe de Conception :
+   1. Énumérateur Topologique Exact :
+   * Génère automatiquement les 197 configurations de Tuiles (graphes de voisinage sans miroir) ou les 394 configurations orientées de 3 à 6 joueurs.
+   * Chaque configuration est taguée par sa Signature Asymétrique : nombre de tuiles (G, R, M) disponibles en lisière et nombre de paires intra-regroupement (Intra-Animal G1-G6, Intra-Onirique R1-R2).
+   2. Matrice d'Exécution :
+   * Pour chaque Variante (combinaison d'un réglage de Châssis + une Feuille de Patch + une instanciation des $Sweep), le simulateur traverse les configurations de table de  à .
+   * Sur chaque configuration de table, il exécute  parties Monte-Carlo (avec graines aléatoires contrôlées Common Random Numbers : les mêmes séquences de tirages 2D6 et de paquets Machine sont rejouées d'une variante à l'autre pour réduire la variance statistique et isoler l'effet pur du patch).
+5. Modélisation des Joueurs (Profils de Bots pour l'Évaluation)
+Pour mesurer à la fois l'équilibre mathématique, l'intérêt de la coopération muette et la charge cognitive, chaque variante est testée avec 3 profils de décision gradués :
+      1. Bot « Réflexe / Myope » (Charge Cognitive Minimale) :
+      * Ne fait aucune déduction probabiliste sur les dés cachés de ses voisins.
+      * 1er Défenseur (Étape 2.1) : Protège sa propre piste Forêt si son tirage secret menace directement ses arbres, sinon se place sur une lisière adjacente.
+      * 2e Défenseur (Étape 2.2) : Complète systématiquement le binôme libre le plus proche (Furtivité ou construction de Tuile) ou défend la parcelle ayant le plus de machines.
+      2. Bot « Coopératif Heuristique » (Joueur Humain Standard / Cible Design) :
+      * Utilise l'information publique du plateau (position des machines, parcelles déjà rasées, tuiles Rêve sur la piste centrale) et interprète le placement du 1er Défenseur des autres joueurs comme un signal (ex. « Si le joueur Mammifères n'a pas posé son 1er Défenseur sur sa forêt alors que ses machines sont en p=2, sa carte tirée cible probablement un autre rayon ou est un Rêve/Sabotage »).
+      * Évalue les actions selon une fonction d'utilité pondérée : (Arbres menacés sauvés) + (Valeur de construction d'une Tuile G/R/M) + (Rentabilité d'un Piège/Sabotage).
+      3. Bot « Oracle / Omniscient » (Borne Supérieure Théorique) :
+      * Joue à information ouverte (connaît les cartes Machine et les dés  de tous les joueurs dès l'Étape 2) et optimise l'allocation globale des  Défenseurs et des déplacements d'Insectes.
+      * Intérêt analytique : L'écart de performance entre le Bot Réflexe, le Bot Coopératif Heuristique et le Bot Oracle mesure directement la valeur de la communication muette et le coût de l'information cachée.
+6. Système de Notation Multi-Critères (Les 5 Axes d'Évaluation)
+À l'issue d'une campagne, le simulateur calcule pour chaque variante un Vecteur de Performance structuré autour de tes 5 critères de design :
+Axe 1 : Rythme, Tension et Conditions de Fin de Partie
+         * Distribution des fins de partie (%) : Part respective de Fin du contrat (Tour 8), Réveil de la Forêt (Gardiens) et Sommeil du Contremaître (Rêve).
+         * Tour moyen et fractiles d'arrêt anticipé : Distribution du tour de victoire anticipée (alerte de snowball si $> 10\%$ des parties s'arrêtent aux tours 1 à 4).
+         * Tension de fin de partie : Écart moyen à la condition de victoire au moment où la partie s'arrête (ex. position du Rêve le plus avancé ou nombre de Gardiens posés au Tour 8).
+Axe 2 : Équilibre Asymétrique & Invariance Topologique
+         * Dispersion inter-configurations () : Écart-type du score moyen (en pourcentage d'arbres sauvés sur les  arbres initiaux) entre les 197 configurations de voisinage.
+         * Biais de Peuple et de Regroupement : Score moyen et taux d'arrêt anticipé conditionnés par la présence de chaque Peuple (M, R, O, H, E, I) et par la typologie de table (ex. table dominante Animaux Sauvages vs table Onirique vs table alternée).
+         * Détection des configurations « Impossibles » ou « Triviales » : Liste des voisinages spécifiques dont le score s'écarte de plus de  de la moyenne globale.
+Axe 3 : Richesse Stratégique, Coopération & Entropie des Actions
+            * Entropie d'utilisation des mécaniques : Fréquence par partie des Parades réussies, Pièges posés/déclenchés, Sabotages acquis/piochés, Tuiles G/R/M construites, Nids activés et Insectes migrés en .
+            * Taux d'utilisation des Tuiles (Pick Rate & Impact Marginal) : Pour chacune des 30 tuiles (G1-G15, R1-R10, M1-M5), fréquence de construction lorsqu'elle est présente en lisière et corrélation avec le score final (identifie les tuiles « mortes » jamais construites ou « auto-win »).
+            * Gain de Coopération () : Différence de score entre le Bot Coopératif Heuristique et le Bot Réflexe. Plus ce delta est élevé (sans que le jeu soit punitif), plus la lecture du jeu des alliés est récompensée.
+Axe 4 : Calibration du Score (Arbres Debout après Repousse)
+               * Distribution du Ratio d'Arbres Sauvés () : Moyenne, médiane, écart-type, 10e et 90e centiles après la phase de Repousse des souches.
+               * Taux de Parcelles Rasées : Proportion de parcelles ayant subi le passage non paré d'un Bulldozer (perte irréversible même à la Repousse).
+               * Dynamique d'érosion par tour : Courbe moyenne du nombre d'Arbres debout, de Souches et de Parcelles rasées du Tour 1 au Tour 8.
+Axe 5 : Simplicité Ergonomique & Légèreté de Charge Cognitive
+Le simulateur calcule un Indice de Charge Cognitive () combinant 4 compteurs objectifs :
+                  1. Indice de Complexité Lexicale du Patch () : Nombre moyen de primitives par Slot + pénalité si un Slot combine plus de 2 briques élémentaires ou des conditions imbriquées.
+                  2. Indice de Cascade & Manipulation () : Nombre moyen et maximal de réactions en chaîne déclenchées par tour sur la Piste des Gardiens + nombre de manipulations de pions hors-séquence (permutations de piste, déplacements d'entités en cours de résolution).
+                  3. Empilement Arithmétique en Parade () : Nombre moyen de modificateurs distincts simultanément actifs lors du calcul du Seuil de Parade à l'Étape 5.
+                  4. Pénalité d'Opacité () : Ratio de performance entre le Bot Oracle (omniscient) et le Bot Coopératif Heuristique. Si le Bot Oracle écrase le jeu alors que le Bot Heuristique échoue lourdement sur une variante donnée, cela révèle que la variante repose sur des synergies impossibles à coordonner sans tricher sur le silence de l'Étape 2.
+7. Format du Rapport de Sortie (Prêt pour l'IA d'Analyse)
+Pour que l'IA d'analyse puisse ingérer les résultats de milliers de parties sans saturer sa fenêtre de contexte tout en conservant une précision chirurgicale, le simulateur génère un Dossier de Synthèse Structuré (JSON + Rapport Markdown) contenant :
+                     1. Méta-données de la Campagne : Paramètres du Châssis testés, hash de la Feuille de Patch, nombre de simulations par configuration.
+                     2. Tableau de Classement des Variantes (Leaderboard) : Toutes les variantes triées selon un score composite pondéré (et selon le front de Pareto Équilibre vs Richesse vs Légèreté Cognitive).
+                     3. Matrice de Santé des 30 Tuiles & des 6 Peuples : Pour chaque tuile G1..M5, son taux de construction, son tour moyen de pose, sa fréquence d'activation, son nombre d'upgrades/sacrifices, et son  de score marginal.
+                     4. Journal des Anomalies Automatiques (Red Flags) : Liste générée automatiquement signalant à l'IA d'analyse :
+                        * Les tuiles choisies dans $< 10\%$ ou $> 90\%$ des parties où elles sont disponibles,
+                        * Les configurations de voisinage qui gagnent ou perdent systématiquement,
+                        * Les Slots qui provoquent des cascades moyennes  par tour.
+                           5. Traces Narratives d'Échantillons (3 parties types par variante) : L'historique tour par tour condensé de la meilleure partie, de la partie médiane et de la pire partie pour permettre à l'IA d'analyse de comprendre concrètement comment la variante se comporte en situation réelle.
+1. Architecture Cible sur Google Cloud Platform (Serverless & HPC à la demande)
+Le pipeline de simulation et d'analyse s'articule autour de 5 briques GCP managées :
+[Dépôt Patchs JSON] ──> (1. Cloud Storage) 
+                               │
+                               ▼
+              (2. Cloud Run Jobs / Cloud Batch)
+               ├─ Conteneur Docker : Python 3.12 + Numba JIT
+               ├─ Parallélisation : Tasks distribuées (vCPU Spot à la demande)
+               └─ Exécution : 197 configs × Variantes ($Sweep) × State Forking
+                               │
+             ┌─────────────────┴─────────────────┐
+             ▼                                   ▼
+   (3. BigQuery / Parquet)            (4. Cloud Storage Artifacts)
+    Tables de métriques brutes         Synthèse JSON + Traces Markdown
+             │                                   │
+             └─────────────────┬─────────────────┘
+                               ▼
+                    (5. Vertex AI API - Gemini)
+                     Analyse multi-critères des 5 axes,
+                     détection des Red Flags & recommandations de patch
+Choix du moteur d'exécution CPU : Cloud Run Jobs vs Cloud Batch
+                           * Option A — Cloud Run Jobs (Recommandée pour campagnes courantes < 1h) :
+                           * Permet de lancer instantanément un conteneur Docker découpé en 1 à 1 000 tâches parallèles (TASK_INDEX), chaque tâche disposant jusqu'à 8 vCPU et 32 Go de RAM.
+                           * Facturation à la seconde d'exécution CPU réelle, aucune VM à gérer ni temps de provisionnement lent.
+                           * Option B — Google Cloud Batch sur instances Spot C3D ou C4 (Pour méga-campagnes d'exploration exhaustive) :
+                           * Provisionne automatiquement un pool de VMs Compute-Optimized (c3d-highcpu-32 ou c3d-highcpu-64) en tarif Spot (-60 % à -80 % du prix standard) le temps du job, puis détruit les VMs dès la dernière tâche terminée.
+2. Conception Bas-Niveau du Moteur : Structures de Données « Flat-Array » & Clonage Zero-Overhead
+Pour que le Clonage d'État (State Forking) et la compilation Numba (@njit(nogil=True)) fonctionnent à plusieurs dizaines de milliers de parties par seconde et par cœur CPU, il est proscrit d'utiliser des objets Python classiques (class Parcelle, dict, listes imbriquées) dont le copy.deepcopy() saturerait le processeur.
+L'intégralité de l'état d'une partie (GameState) est encodée dans un bloc mémoire contigu (NumPy int16/int8 structuré d'environ 256 octets). Cloner une partie en cours à l'Étape 2 se résume à un state_clone = state.copy() qui s'exécute en moins de 50 nanosecondes (simple memcpy dans le cache L1 du CPU).
+2.1. Modèle de Données Contigu (GameState — Taille fixe max )
+Champ (Tableau NumPy)
+	Dimensions & Type
+	Description & Encodage binaire (Règles v4.6)
+	meta
+	int16[8]
+	[0]: N_joueurs (3..6), [1]: P_max, [2]: Tour_courant (1..8), [3]: Etape_courante, [4]: Statut_Fin (0=En_cours, 1=Tour8, 2=Gardiens, 3=Reve).
+	forets
+	int8[6, 6, 4]
+	Par rayon  et profondeur  : [0]: Arbres_debout (0..3), [1]: Souches (0..3), [2]: Piege_present (0/1), [3]: ID_Nid_Croissance (0 ou 1..5).
+	machines
+	int8[6, 2, 4]
+	Par rayon  et type (0=Abatteuse, 1=Bulldozer) : [0]: Position_p (1..P_max), [1]: Puissance (0..8), [2]: Tactique_active_tour (0=Inactive, 1..6=T1..T6), [3]: Gain_puissance_bloque (0/1).
+	lisieres_furtivite
+	int8[6, 6, 2]
+	Par lisière  et profondeur  : [0]: Nb_Defenseurs_presents, [1]: Nb_Insectes_presents.
+	tuiles_lisiere
+	int8[6, 2, 3]
+	Les 2 emplacements  et  par lisière : [0]: ID_Tuile (1..30), [1]: Statut (0=En_lisiere, 1=En_jeu, 2=Sacrifiee_epuisee), [2]: Nb_Defenseurs_constructeurs.
+	piste_tactiques
+	int8[6, 4]
+	Rangs 1 à 6 (index 0..5) : [0]: ID_Tuile (1..6=T1..T6, 101..110=R1..R10), [1]: Jetons_Apprentissage, [2]: Insectes_attaches_rang, [3]: Insectes_attaches_tuile.
+	piste_gardiens
+	int8[6, 4]
+	Cases Déclencheurs 1 à 6 (index 0..5) : [0]: ID_Gardien (0=Vide, 1..15=G1..G15), [1]: Face (1=F1, 2=F2), [2]: Deja_active_ce_tour (0/1 anti-boucle), [3]: Insectes_colonie.
+	paquet_machines
+	int8[32]
+	Pile contiguë contenant les IDs des  machines (0..11) + cartes Sabotage (99), avec pointeurs nb_cartes_total et nb_sabotages_en_pile.
+	tirages_secrets
+	int8[6, 3]
+	Derrière le mini-paravent du joueur  : [0]: Carte_tiree, [1]: De_M (1..6), [2]: Info_revelee_mask (bitmask Partage_Info).
+	rng_state
+	uint64[2]
+	État interne du générateur pseudo-aléatoire Xoroshiro128+ embarqué dans le GameState (permet de figer ou dériver l'aléatoire lors d'un clonage).
+	3. Compilateur de « Feuilles de Patch » JSON vers Bytecode Numba
+Comme Numba @njit ne peut pas interpréter du JSON dynamiquement pendant la boucle de jeu, le simulateur intègre un Pré-compilateur de Patch (PatchCompiler) au démarrage du job :
+                           1. Expansion des $Sweep : Le script Python lit le fichier JSON de la feuille de patch et génère le produit cartésien de tous les paramètres contenant {"$Sweep": [...]}. Chaque combinaison unique reçoit un variant_id.
+                           2. Encodage en Table d'Instructions (SlotBytecode) : Chaque action des 30 tuiles et des 2 Slots d'Insectes est traduite en un vecteur d'entiers de longueur fixe :
+                           3. Python
+# Format d'une instruction atomique (int16[6]) :
+# [PRIMITIVE_ID, TARGET_SELECTOR_ID, PARAM_VAL_1, PARAM_VAL_2, CONDITION_ID, HOOK_ID]
+                           4. 
+Exemple : MOD_SEUIL (1) sur PARCELLE_DU_NID (4) de valeur -1 devient [1, 4, -1, 0, 0, 0].
+                           5. Exécution Vectorisée des Cascades (Étape 3, 4, 5) :
+                              * Un masque binaire triggers_queue (6 bits correspondant aux 6 Déclencheurs de la Piste des Gardiens) est maintenu.
+                              * Dès qu'une action du Châssis ou une primitive allume un Déclencheur , le bit  passe à 1.
+                              * Une boucle while triggers_queue != 0: dépile le déclencheur actif, vérifie que piste_gardiens[d, 2] == 0 (règle anti-boucle d'une ouverture max par tour), incrémente le compteur ICC_cascade, exécute le bytecode du Slot, et marque piste_gardiens[d, 2] = 1.
+4. Implémentation de la Boucle de Révision (Étape 2.2) & du Clonage (State Forking)
+4.1. Algorithme de Convergence du 2e Défenseur (« En réflexion »  « Définitif »)
+Pour simuler fidèlement la mécanique de coordination silencieuse de l'Étape 2.2 :
+Python
+@njit
+def resolve_step_2_defenders(state, bot_profile, metrics):
+    # 2.1 : Pose irrévocable des Premiers Défenseurs (Ancrage local)
+    first_def_targets = np.empty(N, dtype=np.int16)
+    for i in range(N):
+        first_def_targets[i] = select_first_defender_local(state, i, bot_profile)
+        apply_defender_placement(state, i, defender_num=1, target=first_def_targets[i])
+
+
+    # Mise à jour de la matrice de croyance bayésienne publique (inférence à partir du 1er Défenseur)
+    belief_matrix = compute_public_beliefs(state, first_def_targets)
+
+
+    # 2.2 : Boucle de révision du Deuxième Défenseur (Face "En réflexion" -> "Définitif")
+    second_def_targets = np.empty(N, dtype=np.int16)
+    is_definitive = np.zeros(N, dtype=np.bool_)
+
+
+    # Ronde t = 0 : Intention initiale (En réflexion)
+    for i in range(N):
+        second_def_targets[i] = select_second_defender_global(state, i, belief_matrix, bot_profile)
+
+
+    if bot_profile == BOT_REFLEXE_SANS_REVISION:
+        # Verrouillage immédiat sans révision (sert de baseline pour mesurer Delta_Reflexion)
+        commit_all_second_defenders(state, second_def_targets)
+        return
+
+
+    # Rondes t = 1..3 : Résolution des Orphelins et des Overkills
+    for round_idx in range(3):
+        orphan_slots, overkill_slots = detect_coordination_conflicts(state, first_def_targets, second_def_targets)
+        if len(orphan_slots) == 0 and len(overkill_slots) == 0:
+            break  # Convergence atteinte, tout le monde passe en "Définitif"
+        
+        for i in range(N):
+            if not is_definitive[i]:
+                new_target, lock = revise_second_defender(
+                    state, i, second_def_targets[i], orphan_slots, overkill_slots, belief_matrix
+                )
+                if new_target != second_def_targets[i]:
+                    metrics.nb_revisions_step2 += 1
+                    second_def_targets[i] = new_target
+                is_definitive[i] = lock
+
+
+    commit_all_second_defenders(state, second_def_targets)
+4.2. Protocole de State Forking (Clonage d'Arbres de Décision)
+Pour évaluer scientifiquement la valeur marginale des choix sans bruit aléatoire :
+                                 1. Sur un sous-échantillon de parties (ex. 20 % des parties de chaque configuration de voisinage), au début de l'Étape 2 des tours clés (), le moteur crée 4 clones exacts du GameState (incluant le même rng_state pour les tours futurs) :
+                                    * Clone 0 (Référence) : Joue la stratégie normale du Bot Coopératif Heuristique.
+                                    * Clone 1 (Branche Construction Forcée) : Force la formation d'un binôme sur la Tuile de Synergie (G, R ou M) disponible la plus accessible en lisière, puis reprend le cours normal aux tours suivants.
+                                    * Clone 2 (Branche Furtivité Forcée) : Priorise la formation d'un binôme sur une case Furtivité (Piège/Sabotage).
+                                    * Clone 3 (Branche Défense Pure) : Interdit la pose en lisière ce tour-ci et alloue les Défenseurs uniquement sur les parcelles Forêt.
+                                    2. Les 4 clones sont simulés jusqu'à la fin de la partie. Le simulateur enregistre le vecteur $\Delta\text{Score} = (\text{Score}_{\text{Clone } k} - \text{Score}_{\text{Clone } 0})$ ainsi que le taux d'inversion de décision optimale (mesure de la richesse du dilemme tactique).
+5. Partitionnement du Calcul Distribué & Estimation de Performance / Coût sur GCP
+5.1. Volumétrie d'une Campagne Standard
+                                    * 197 configurations de voisinage (de 3 à 6 joueurs, sans miroir).
+                                    * 3 profils de bots (Réflexe sans révision, Coopératif avec révision, Oracle omniscient).
+                                    * 500 parties Monte-Carlo par couple (Configuration × Profil Bot) + branches de State Forking.
+                                    * Soit  parties (environ  trajectoires avec les branches clonées) par variante de feuille de patch.
+5.2. Vitesse d'exécution et Coût GCP
+Avec le moteur encodé en tableaux NumPy fixes et compilé via Numba @njit(nogil=True) :
+                                       * Vitesse unitaire : ~15 000 à 25 000 parties complètes (8 tours) par seconde sur 1 vCPU moderne.
+                                       * Pour 1 variante complète (500 000 trajectoires) : ~25 secondes sur 1 vCPU, soit < 1 seconde sur un job parallélisé à 32 vCPU.
+                                       * Pour un balayage massif ($Sweep de 100 variantes = 50 millions de parties) :
+                                       * Découpé en 20 tâches Cloud Run Jobs de 4 vCPU chacune (80 vCPU au total).
+                                       * Durée totale du run : ~35 secondes.
+                                       * Coût GCP du run (tarif Cloud Run CPU/RAM à la seconde) : < 0,15 € pour 50 millions de parties simulées.
+6. Pipeline d'Agrégation BigQuery & Analyse Automatisée via Vertex AI (Gemini)
+Une fois les tâches de calcul terminées, un conteneur de post-traitement (Aggregator Task) consolide les résultats et interroge l'API Vertex AI (google-genai SDK).
+6.1. Schéma des Tables de Sortie (BigQuery / Parquet sur Cloud Storage)
+                                       1. fact_variant_summary (1 ligne par variante issue du $Sweep) :
+                                       * Scores des 5 axes : score_arbres_moyen, pct_fin_tour8, pct_fin_gardiens, pct_fin_reve, tour_moyen_arret, sigma_inter_configs, delta_coop, delta_reflexion_step2, delta_oracle, icc_global (icc_statique, icc_cascade, icc_calcul).
+                                       2. fact_tile_telemetry (30 lignes par variante : G1..G15, R1..R10, M1..M5) :
+                                       * pick_rate_when_available, mean_turn_built, trigger_activations_per_game, upgrade_f2_rate, sacrifice_rate, forking_marginal_value_trees ( issu du clonage d'état).
+                                          3. fact_topology_balance (197 lignes par variante) :
+                                          * config_id, n_players, peoples_circle, nb_G_tiles, nb_R_tiles, nb_M_tiles, mean_score_ratio, win_mode_distribution.
+6.2. Appel Automatisé à l'Analyste IA (Vertex AI)
+Le script d'agrégation génère un Dossier Condensé (JSON + Markdown < 30k tokens) contenant le classement Pareto des variantes, la matrice des 30 tuiles, les Red Flags statistiques et les traces de parties types, puis l'envoie à Gemini via Vertex AI avec un prompt système structuré pour produire ton rapport de Game Design :
+                                          * Diagnostic d'équilibre entre les 3 voies de fin de partie (Tour 8, Gardiens, Rêve).
+                                          * Identification des tuiles G/R/M sous-jouées ou dominantes d'après le  du State Forking.
+                                          * Validation du gain procuré par la phase de réflexion du 2e Défenseur ().
+                                          * Proposition directe d'un nouveau fichier JSON de Feuille de Patch () corrigeant les paramètres défectueux.
+7. Structure du Dépôt de Code (amazonia-sim-gcp)
+Plaintext
+amazonia-sim-gcp/
+├── Dockerfile                      # Image légère python:3.12-slim + numba + google-cloud-bigquery + google-genai
+├── deploy_cloud_run_job.sh         # Script gcloud CLI pour déployer et lancer une campagne à la demande
+├── patches/
+│   ├── baseline_v4_6.json          # Feuille de patch Socle / Standard
+│   └── custom_sweep_01.json        # Feuilles de patch générées dans tes autres discussions Gemini
+├── src/
+│   ├── core/
+│   │   ├── state.py                # Définition NumPy structurée du GameState (256 octets) + Xoroshiro128+
+│   │   ├── topology.py             # Générateur exact des 197 graphes de voisinage et matrice des 30 tuiles
+│   │   ├── engine_steps.py         # Moteur @njit des 6 étapes du Châssis v4.6
+│   │   └── primitives_vm.py        # Machine virtuelle @njit exécutant les 7 Briques Élémentaires & Cascades
+│   ├── bots/
+│   │   ├── belief_inference.py     # Inférence du signal du 1er Défenseur
+│   │   ├── step2_negotiation.py    # Boucle de révision du 2e Défenseur (En réflexion -> Définitif)
+│   │   └── profiles.py             # Réflexe, Coopératif Heuristique, Oracle Omniscient
+│   ├── runner/
+│   │   ├── patch_compiler.py       # Expansion des $Sweep et compilation JSON -> Bytecode Numba
+│   │   ├── state_forking.py        # Gestionnaire de clonage d'état et calcul de valeur marginale Delta_V
+│   │   └── worker.py               # Point d'entrée Cloud Run Job (partitionnement par CLOUD_RUN_TASK_INDEX)
+│   └── analytics/
+│       ├── kpi_evaluator.py        # Calcul des 5 axes de notation et de l'Indice de Charge Cognitive (ICC)
+│       └── vertex_ai_analyst.py    # Génération du rapport IA et suggestion de patch correctif via Vertex AI
+
+1. Extension du Périmètre des Variantes (Châssis + Slots)
+Le simulateur doit pouvoir explorer de manière croisée deux types de modifications :
+                                             1. Les Variantes de Châssis (Cœur du jeu) : Modification des paramètres structurels globaux (ex: tester  vs  vs , modifier la courbe de génération des Nids de Croissance, activer ou désactiver la règle de révision de l'Étape 2.2, changer la règle du seuil du Réveil de la Forêt ou le comportement d'une machine en ).
+                                             2. Les Variantes de Slots (Feuilles de Patch) : Modification des effets des 30 tuiles de synergie (G1-G15, R1-R10, M1-M5) et des 2 Slots de migration d'Insectes (Bug du Cerf-volant / Cerveau et Colonisation des Gardiens) via la grammaire des 7 briques élémentaires.
+2. Le Pipeline d'Agrégation et de Filtrage Intelligent (Smart Summarization)
+Pour éviter de noyer l'IA sous des millions de lignes de données brutes tout en lui évitant d'avoir à manipuler des notes ou des pondérations arbitraires, le simulateur intègre un moteur de réduction de dimensions en 4 étapes :
+A. Le Clustering par « Régimes de Comportement » (Macro-synthèse)
+Plutôt que d'envoyer les résultats des 197 configurations de tables individuelles, le simulateur groupe les tables par similarité de comportement statistique (ex: Régime à haute tension de machines, Régime de prolifération d'insectes, Régime de verrouillage par les Rêves).
+                                                * Ce que reçoit l'IA : Une matrice condensée montrant comment la variante de Châssis ou de Slot se comporte selon ces grands régimes de table, mettant en évidence les bascules de dynamique.
+B. Le Rapport d'Anomalies Objectifs (Détection des « Red Flags »)
+Le simulateur applique des filtres statistiques purement factuels basés sur les écarts à la moyenne globale :
+                                                * Détection de saturation : Signalement si une règle de Châssis provoque un arrêt anticipé dans plus de 80% des parties (blocage de la partie) ou si une tuile de Slot a un taux de construction nul ou obligatoire ($< 5\%$ ou $> 95\%$).
+                                                * Bris de symétrie : Signalement des configurations de voisinage ou des Peuples spécifiques qui décrochent anormalement de la performance collective.
+C. La Synthèse Comparative en Delta ( vs Socle v4.6)
+Chaque nouvelle variante (qu'elle touche au Châssis ou aux Slots) est systématiquement comparée au Socle de Référence v4.6 :
+                                                * Ce que reçoit l'IA : Les deltas précis. Par exemple : « Modifier le comportement de la machine en  réduit la durée moyenne de la partie de 1.2 tours, augmente le taux de victoire par les Gardiens de $+12\%$, mais double l'écart-type entre les configurations extrêmes. »
+D. Le Florilège de Trajectoires Contrastées (Cas d'école)
+Pour ancrer l'analyse statistique dans la réalité du plateau, le simulateur sélectionne et condense automatiquement 3 parties types issues des simulations :
+                                                   1. La partie médiane (comportement standard).
+                                                   2. La victoire à l'arraché (sauvée in extremis au tour 8).
+                                                   3. L'effondrement systémique (défaite rapide par saturation du Contremaître ou des machines).
+                                                   * Ce que reçoit l'IA : L'historique chronologique condensé de ces 3 parties pour relier les chiffres globaux aux enchaînements mécaniques vécus par les joueurs.
+3. Format du Rapport de Synthèse Transmis à l'IA (Vertex AI)
+Le fichier unique transmis à l'IA pour analyse se structurera toujours de la même manière standardisée :
+JSON
+{
+  "contexte_experience": {
+    "type_variante": "CHASSIS_OU_SLOT",
+    "identifiant": "nom_de_la_variante_ou_patch",
+    "volume_parties_simulees": 50000
+  },
+  "indicateurs_macro_deltas": {
+    "taux_victoire_global_delta": "+3.5%",
+    "repartition_fins_de_partie": { "tour_8": "45%", "gardiens": "35%", "reve": "20%" },
+    "tendance_score_arbres": "+2.1 en moyenne"
+  },
+  "regimes_de_table_detectes": [
+    { "regime": "Tables à forte densité d'Animaux Sauvages", "impact": "Favorable (+5% score)" },
+    { "regime": "Tables alternées Oniriques", "impact": "Tendu (-3% score)" }
+  ],
+  "red_flags_et_anomalies": [
+    "Alerte : La modification de P_max génère un taux d'impasse de 14% sur les tables à 3 joueurs."
+  ],
+  "traces_narratives_types": {
+    "partie_mediane": "...",
+    "victoire_arrachee": "...",
+    "effondrement": "..."
+  }
+}
+

@@ -1,0 +1,8 @@
+{
+  "name": "Simulateur Amazonia",
+  "description": "Simulateur Monte-Carlo et atelier d'équilibrage pour Amazonia : Dernier Rempart (v4.6), avec moteur Flat-Array, énumérateur topologique (197/394), compilateur de Slots et Analyste IA.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
